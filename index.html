@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>EchoFlow — a small Spotify-like player</title>
+<style>
+  :root{
+    --bg:#0e0f15; --panel:#121217; --muted:#9aa0a6; --accent:#1db954;
+    --card:#17181d; --glass: rgba(255,255,255,0.03);
+    color-scheme: dark;
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  }
+  html,body{height:100%; margin:0; background:linear-gradient(180deg,#07070a 0%, #0f1115 100%); color:#e6eef3}
+  .app{display:grid; grid-template-columns:260px 1fr; height:100vh; gap:18px; padding:18px;}
+  .sidebar{background:var(--panel); border-radius:12px; padding:18px; display:flex; flex-direction:column; gap:12px; box-shadow:0 6px 30px rgba(0,0,0,0.6)}
+  .logo{font-weight:700; font-size:18px; color:var(--accent); display:flex; align-items:center; gap:10px}
+  .nav{display:flex; flex-direction:column; gap:8px; margin-top:6px}
+  .nav button{background:transparent; border:0; color:var(--muted); text-align:left; padding:8px; border-radius:8px; cursor:pointer}
+  .nav button:hover{background:var(--glass); color:#fff}
+  .main{display:flex; flex-direction:column; gap:12px}
+  .topbar{display:flex; align-items:center; justify-content:space-between; padding:12px; background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent); border-radius:12px}
+  .player-area{display:grid; grid-template-columns: 1fr 340px; gap:16px; align-items:start}
+  .library{background:var(--card); padding:12px; border-radius:12px; overflow:auto; max-height:60vh}
+  .song{display:flex; gap:12px; align-items:center; padding:8px; border-radius:8px; cursor:pointer}
+  .song:hover{background:rgba(255,255,255,0.02)}
+  .song.active{background:linear-gradient(90deg, rgba(29,185,84,0.08), rgba(29,185,84,0.02)); border-left:3px solid var(--accent); padding-left:5px}
+  .cover{width:48px; height:48px; background:#222; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--muted)}
+  .meta{display:flex; flex-direction:column}
+  .meta .title{font-weight:600}
+  .meta .sub{font-size:12px; color:var(--muted)}
+  .controls{display:flex; flex-direction:column; gap:8px; padding:12px; background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent); border-radius:12px}
+  .controls .buttons{display:flex; justify-content:center; gap:18px; align-items:center}
+  .btn{background:transparent; border:0; color:#fff; font-size:18px; cursor:pointer; padding:8px}
+  .btn.secondary{color:var(--muted); font-size:14px}
+  .progress{display:flex; gap:8px; align-items:center}
+  .progress input[type="range"]{width:100%}
+  .rightpanel{background:var(--card); padding:12px; border-radius:12px; height:60vh; overflow:auto}
+  .queue-list{display:flex; flex-direction:column; gap:8px}
+  .small{font-size:13px; color:var(--muted)}
+  .toggle{display:inline-flex; align-items:center; gap:8px}
+  footer.playerbar{position:fixed; left:0; right:0; bottom:0; background:rgba(10,10,12,0.8); backdrop-filter: blur(6px); padding:10px 18px; display:flex; align-items:center; gap:14px; border-top:1px solid rgba(255,255,255,0.02)}
+  .player-mini{display:flex; gap:12px; align-items:center; width:100%}
+  .mini-title{font-weight:600}
+  .muted{color:var(--muted)}
+  .flex{display:flex; gap:8px; align-items:center}
+  .pill{padding:6px 8px; border-radius:999px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.02); font-size:13px}
+  .search{width:320px}
+  input[type=search]{background:transparent; border:1px solid rgba(255,255,255,0.03); padding:8px 10px; border-radius:8px; color:inherit}
+  .empty{opacity:0.7; padding:24px; text-align:center}
+  @media (max-width:900px){
+    .app{grid-template-columns:1fr; padding-bottom:120px}
+    .player-area{grid-template-columns:1fr}
+    .rightpanel{height:auto}
+    footer.playerbar{position:fixed}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">🎧 EchoFlow</div>
+    <div class="nav">
+      <button id="btnLibrary">Library</button>
+      <button id="btnQueue">Queue</button>
+      <button id="btnSettings">Settings</button>
+    </div>
+
+    <div style="margin-top:auto">
+      <div class="small">Local folder:</div>
+      <div class="pill" id="songsPath">/songs/</div>
+      <div class="small" style="margin-top:8px">Tip: put audio files in <code>songs/</code> and add <code>songs/songs.json</code> for metadata.</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div style="display:flex; gap:12px; align-items:center">
+        <div class="pill" id="status">Loading songs…</div>
+        <div style="display:flex; gap:8px; align-items:center">
+          <input id="searchInput" class="search" type="search" placeholder="Search songs, artists..." />
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center">
+        <label class="toggle small"><input id="shuffleToggle" type="checkbox" /> Shuffle</label>
+        <label class="toggle small"><input id="orderToggle" type="checkbox" /> Play in order</label>
+        <div class="small muted">Space: Play/Pause · S: Shuffle</div>
+      </div>
+    </div>
+
+    <section class="player-area">
+      <section>
+        <div class="library" id="library">
+          <div class="empty" id="emptyHint">No songs found yet. Add audio files to <code>/songs/</code> and/or create <code>songs/songs.json</code>. Then reload.</div>
+          <div id="songList"></div>
+        </div>
+      </section>
+
+      <aside class="rightpanel">
+        <div class="controls">
+          <div style="display:flex; justify-content:space-between; align-items:center">
+            <div>
+              <div class="small">Now playing</div>
+              <div id="nowTitle" class="mini-title">—</div>
+              <div id="nowArtist" class="small muted">—</div>
+            </div>
+            <div style="text-align:right">
+              <div id="durationTotal" class="small muted">0:00</div>
+              <div class="small muted">Volume</div>
+              <input id="volume" type="range" min="0" max="1" step="0.01" value="0.9" />
+            </div>
+          </div>
+
+          <div class="buttons" style="margin-top:6px">
+            <button id="prevBtn" class="btn">⏮</button>
+            <button id="playBtn" class="btn" title="Play/Pause">▶️</button>
+            <button id="nextBtn" class="btn">⏭</button>
+          </div>
+
+          <div class="progress">
+            <div id="timeCur" class="small muted">0:00</div>
+            <input id="seek" type="range" min="0" max="100" value="0" />
+            <div id="timeRem" class="small muted">0:00</div>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px">
+            <button id="addFromFolder" class="btn secondary">Reload folder</button>
+            <button id="clearQueue" class="btn secondary">Clear queue</button>
+          </div>
+        </div>
+
+        <div style="margin-top:12px">
+          <div class="small" style="margin-bottom:6px">Up next</div>
+          <div class="queue-list" id="queueList"></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</div>
+
+<footer class="playerbar">
+  <div class="player-mini">
+    <div class="cover" id="miniCover">🎵</div>
+    <div style="flex:1">
+      <div id="miniTitle" class="mini-title">—</div>
+      <div id="miniArtist" class="small muted">—</div>
+    </div>
+    <div class="flex">
+      <button class="btn" id="miniPrev">⏮</button>
+      <button class="btn" id="miniPlay">▶️</button>
+      <button class="btn" id="miniNext">⏭</button>
+    </div>
+  </div>
+</footer>
+
+<!-- Hidden audio element -->
+<audio id="audio" preload="metadata"></audio>
+
+<script>
+(() => {
+  const SONGS_PATH = '/songs/'; // change here if you put your files elsewhere
+  const songsEl = document.getElementById('songList');
+  const queueEl = document.getElementById('queueList');
+  const audio = document.getElementById('audio');
+  const status = document.getElementById('status');
+  const emptyHint = document.getElementById('emptyHint');
+  const playBtn = document.getElementById('playBtn');
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const miniPlay = document.getElementById('miniPlay');
+  const miniPrev = document.getElementById('miniPrev');
+  const miniNext = document.getElementById('miniNext');
+  const nowTitle = document.getElementById('nowTitle');
+  const nowArtist = document.getElementById('nowArtist');
+  const miniTitle = document.getElementById('miniTitle');
+  const miniArtist = document.getElementById('miniArtist');
+  const miniCover = document.getElementById('miniCover');
+  const volume = document.getElementById('volume');
+  const seek = document.getElementById('seek');
+  const timeCur = document.getElementById('timeCur');
+  const timeRem = document.getElementById('timeRem');
+  const durationTotal = document.getElementById('durationTotal');
+  const shuffleToggle = document.getElementById('shuffleToggle');
+  const orderToggle = document.getElementById('orderToggle');
+  const searchInput = document.getElementById('searchInput');
+  const addFromFolder = document.getElementById('addFromFolder');
+  const clearQueue = document.getElementById('clearQueue');
+
+  document.getElementById('songsPath').textContent = SONGS_PATH;
+
+  let library = []; // {file, title, artist, cover}
+  let queue = [];   // indices into library
+  let currentIndex = null; // index in library
+  let isPlaying = false;
+  let shuffle = JSON.parse(localStorage.getItem('ef_shuffle') || 'false');
+  let playInOrder = JSON.parse(localStorage.getItem('ef_playorder') || 'true');
+
+  shuffleToggle.checked = shuffle;
+  orderToggle.checked = playInOrder;
+
+  shuffleToggle.addEventListener('change', () => {
+    shuffle = shuffleToggle.checked;
+    localStorage.setItem('ef_shuffle', JSON.stringify(shuffle));
+    status.textContent = shuffle ? 'Shuffle ON' : 'Shuffle OFF';
+  });
+  orderToggle.addEventListener('change', () => {
+    playInOrder = orderToggle.checked;
+    localStorage.setItem('ef_playorder', JSON.stringify(playInOrder));
+    status.textContent = playInOrder ? 'Play in order' : 'Play by queue';
+  });
+
+  volume.addEventListener('input', ()=> audio.volume = parseFloat(volume.value));
+  audio.volume = parseFloat(volume.value);
+
+  // Format seconds to mm:ss
+  function formatTime(s){
+    if (!isFinite(s)) return '0:00';
+    const m = Math.floor(s/60);
+    const sec = Math.floor(s%60).toString().padStart(2,'0');
+    return m + ':' + sec;
+  }
+
+  function renderLibrary(list){
+    songsEl.innerHTML = '';
+    if (!list.length) {
+      emptyHint.style.display = 'block';
+      return;
+    }
+    emptyHint.style.display = 'none';
+    list.forEach((song, idx) => {
+      const row = document.createElement('div');
+      row.className = 'song';
+      row.dataset.index = idx;
+      if (currentIndex === idx) row.classList.add('active');
+
+      const cover = document.createElement('div');
+      cover.className = 'cover';
+      if (song.cover) {
+        cover.style.backgroundImage = `url(${song.cover})`;
+        cover.style.backgroundSize = 'cover';
+        cover.textContent = '';
+      } else {
+        cover.textContent = song.title ? song.title.charAt(0).toUpperCase() : '♪';
+      }
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const t = document.createElement('div'); t.className = 'title'; t.textContent = song.title || song.file;
+      const s = document.createElement('div'); s.className = 'sub'; s.textContent = song.artist || 'Unknown artist';
+      meta.appendChild(t); meta.appendChild(s);
+
+      row.appendChild(cover);
+      row.appendChild(meta);
+      row.addEventListener('dblclick', () => {
+        // double-click to play that song immediately
+        playSongAt(idx);
+      });
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        addToQueue(idx);
+      });
+      row.addEventListener('click', ()=> {
+        // single click selects in UI (not start)
+        document.querySelectorAll('.song').forEach(n=>n.classList.remove('active'));
+        row.classList.add('active');
+      });
+
+      songsEl.appendChild(row);
+    });
+  }
+
+  function renderQueue(){
+    queueEl.innerHTML = '';
+    if (!queue.length){
+      queueEl.innerHTML = '<div class="small muted">Queue empty</div>';
+      return;
+    }
+    queue.forEach((libIdx, pos) => {
+      const song = library[libIdx];
+      const el = document.createElement('div');
+      el.className = 'song';
+      el.style.padding = '6px';
+      el.innerHTML = `<div style="flex:1"><div class="title">${song.title||song.file}</div><div class="sub">${song.artist||'Unknown'}</div></div>`;
+      const remove = document.createElement('button');
+      remove.className = 'btn secondary';
+      remove.textContent = '✖';
+      remove.addEventListener('click', ()=> {
+        queue.splice(pos,1);
+        renderQueue();
+      });
+      el.appendChild(remove);
+      el.addEventListener('dblclick', ()=> {
+        playSongAt(libIdx);
+      });
+      queueEl.appendChild(el);
+    });
+  }
+
+  function setNowPlaying(idx){
+    currentIndex = idx;
+    if (idx == null) {
+      nowTitle.textContent = '—';
+      nowArtist.textContent = '—';
+      miniTitle.textContent = '—';
+      miniArtist.textContent = '—';
+      miniCover.textContent = '🎵';
+      return;
+    }
+    const s = library[idx];
+    nowTitle.textContent = s.title || s.file;
+    nowArtist.textContent = s.artist || 'Unknown artist';
+    miniTitle.textContent = s.title || s.file;
+    miniArtist.textContent = s.artist || 'Unknown artist';
+    if (s.cover) {
+      miniCover.style.backgroundImage = `url(${s.cover})`;
+      miniCover.style.backgroundSize = 'cover';
+      miniCover.textContent = '';
+    } else {
+      miniCover.style.backgroundImage = '';
+      miniCover.textContent = (s.title ? s.title.charAt(0).toUpperCase() : '🎵');
+    }
+    document.querySelectorAll('.song').forEach(n=>n.classList.remove('active'));
+    const el = document.querySelector(`.song[data-index="${idx}"]`);
+    if (el) el.classList.add('active');
+  }
+
+  function playSongAt(idx){
+    if (idx == null || !library[idx]) return;
+    setNowPlaying(idx);
+    audio.src = SONGS_PATH + encodeURIComponent(library[idx].file);
+    audio.play().then(()=> {
+      isPlaying = true; updatePlayUI();
+    }).catch((e)=> {
+      console.warn('Play failed:', e);
+      status.textContent = 'Playback failed — check cross-origin or file path.';
+    });
+  }
+
+  function updatePlayUI(){
+    playBtn.textContent = isPlaying ? '⏸' : '▶️';
+    miniPlay.textContent = isPlaying ? '⏸' : '▶️';
+  }
+
+  function addToQueue(idx){
+    queue.push(idx);
+    renderQueue();
+    status.textContent = `Added "${library[idx].title||library[idx].file}" to queue`;
+  }
+
+  function playNext(){
+    if (queue.length > 0 && !playInOrder){
+      // take next from queue
+      const nextIdx = queue.shift();
+      renderQueue();
+      playSongAt(nextIdx);
+      return;
+    }
+    // otherwise determine next by shuffle or sequential
+    if (shuffle){
+      if (!library.length) return;
+      let pick;
+      if (library.length === 1) pick = 0;
+      else {
+        do {
+          pick = Math.floor(Math.random()*library.length);
+        } while (pick === currentIndex && library.length > 1);
+      }
+      playSongAt(pick);
+    } else {
+      if (currentIndex == null){
+        if (library.length) playSongAt(0);
+        return;
+      }
+      let next = currentIndex + 1;
+      if (next >= library.length) {
+        // wrap
+        next = 0;
+      }
+      playSongAt(next);
+    }
+  }
+
+  function playPrev(){
+    if (audio.currentTime > 2) {
+      audio.currentTime = 0;
+      return;
+    }
+    if (queue.length>0 && !playInOrder) {
+      // no specific prev in queue; fallback
+    }
+    if (currentIndex == null) return;
+    let prev = currentIndex -1;
+    if (prev < 0) prev = library.length -1;
+    playSongAt(prev);
+  }
+
+  // audio events
+  audio.addEventListener('play', ()=> { isPlaying = true; updatePlayUI(); status.textContent = 'Playing'; });
+  audio.addEventListener('pause', ()=> { isPlaying = false; updatePlayUI(); status.textContent = 'Paused'; });
+  audio.addEventListener('timeupdate', ()=>{
+    const cur = audio.currentTime;
+    const dur = audio.duration || 0;
+    timeCur.textContent = formatTime(cur);
+    timeRem.textContent = formatTime(dur - cur);
+    seek.max = dur || 100;
+    seek.value = cur;
+    durationTotal.textContent = formatTime(dur);
+  });
+  audio.addEventListener('ended', ()=> {
+    isPlaying = false;
+    updatePlayUI();
+    playNext();
+  });
+  seek.addEventListener('input', ()=> {
+    audio.currentTime = parseFloat(seek.value);
+  });
+
+  // controls wired
+  playBtn.addEventListener('click', ()=> {
+    if (!audio.src) {
+      if (library.length) {
+        // choose default start rule: if playInOrder -> first; else queue->first or shuffle
+        if (!playInOrder && queue.length) {
+          playSongAt(queue.shift()); renderQueue();
+          return;
+        }
+        if (playInOrder) playSongAt(0);
+        else if (shuffle) playNext();
+        else playSongAt(0);
+      }
+      return;
+    }
+    if (audio.paused) audio.play();
+    else audio.pause();
+  });
+  miniPlay.addEventListener('click', ()=> playBtn.click());
+  nextBtn.addEventListener('click', playNext);
+  miniNext.addEventListener('click', playNext);
+  prevBtn.addEventListener('click', playPrev);
+  miniPrev.addEventListener('click', playPrev);
+
+  clearQueue.addEventListener('click', ()=> { queue = []; renderQueue(); });
+
+  // keyboard shortcuts
+  window.addEventListener('keydown', (e)=> {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      playBtn.click();
+    } else if (e.key.toLowerCase() === 's') {
+      shuffleToggle.checked = !shuffleToggle.checked;
+      shuffleToggle.dispatchEvent(new Event('change'));
+    }
+  });
+
+  // Search
+  searchInput.addEventListener('input', ()=> {
+    const q = searchInput.value.trim().toLowerCase();
+    const filtered = library.filter(s => (s.title||s.file).toLowerCase().includes(q) || (s.artist||'').toLowerCase().includes(q));
+    renderLibrary(filtered);
+  });
+
+  // load songs sequence: prefer songs/songs.json, fallback to parsing directory listing.
+  async function loadSongs(){
+    status.textContent = 'Loading manifest...';
+    library = [];
+    try {
+      // 1) try songs.json manifest
+      const res = await fetch(SONGS_PATH + 'songs.json', {cache: 'no-store'});
+      if (res.ok){
+        const data = await res.json();
+        // data should be array of {file, title, artist, cover}
+        if (Array.isArray(data)){
+          library = data.map(it => ({
+            file: it.file,
+            title: it.title || it.file,
+            artist: it.artist || '',
+            cover: it.cover ? (SONGS_PATH + it.cover) : (it.cover ?? null)
+          }));
+          status.textContent = `Loaded ${library.length} songs (from songs.json)`;
+          renderLibrary(library);
+          renderQueue();
+          return;
+        }
+      }
+    } catch(e){
+      console.log('No songs.json or failed to parse:', e);
+    }
+
+    // 2) fallback: try to fetch directory listing HTML and parse <a> links
+    try {
+      status.textContent = 'Trying to parse directory listing...';
+      const res2 = await fetch(SONGS_PATH, {cache: 'no-store'});
+      if (res2.ok) {
+        const text = await res2.text();
+        // If server returns an index html with links to files, parse them
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(text, 'text/html');
+        const anchors = Array.from(doc.querySelectorAll('a'));
+        const allowedExt = ['mp3','ogg','wav','m4a','flac'];
+        const files = anchors
+          .map(a => decodeURIComponent(a.getAttribute('href') || ''))
+          .filter(h => {
+            if (!h) return false;
+            const clean = h.split('?')[0].split('#')[0];
+            const ext = clean.split('.').pop().toLowerCase();
+            return allowedExt.includes(ext);
+          })
+          // remove potential parent directory links
+          .filter(f=> !f.includes('..') && !f.startsWith('/'));
+        library = files.map(f => ({
+          file: f,
+          title: decodeURIComponent(f).split('/').pop(),
+          artist: ''
+        }));
+        if (library.length) {
+          status.textContent = `Loaded ${library.length} songs (from directory index)`;
+          renderLibrary(library);
+          renderQueue();
+          return;
+        }
+      }
+    } catch(e){
+      console.log('Directory parsing failed', e);
+    }
+
+    // 3) final fallback: try to fetch a small auto-index file name list like index.txt
+    try {
+      const res3 = await fetch(SONGS_PATH + 'index.txt', {cache:'no-store'});
+      if (res3.ok){
+        const text = await res3.text();
+        const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+        library = lines.map(f=>({file:f, title:f, artist:''}));
+        if (library.length){
+          status.textContent = `Loaded ${library.length} songs (from index.txt)`;
+          renderLibrary(library);
+          renderQueue();
+          return;
+        }
+      }
+    } catch(e){
+      // ignore
+    }
+
+    // nothing found
+    status.textContent = 'No songs found';
+    library = [];
+    renderLibrary(library);
+    renderQueue();
+  }
+
+  // If user clicks reload folder
+  addFromFolder.addEventListener('click', ()=> loadSongs());
+
+  // Helper: if playInOrder is true, set queue initially to ordered library indices
+  function initQueueFromLibrary(){
+    if (playInOrder) {
+      queue = library.map((_,i)=>i).slice(1); // queue everything after current
+    }
+  }
+
+  // initial load
+  loadSongs();
+
+  // small UI wiring: add dbl-click to items works; allow right-click to add queue note in renderLibrary
+
+  // When library list repopulated we keep currentIndex meaning by filename - try to reassign if possible
+  // (not necessary here, left as improvement)
+
+})();
+</script>
+</body>
+</html>
